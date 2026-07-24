@@ -12,14 +12,29 @@ import like_count_pb2
 import uid_generator_pb2
 from google.protobuf.message import DecodeError
 import base64
+import urllib3
+
+# تعطيل تحذيرات SSL غير المشفرة
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
 def load_tokens():
     try:
-        with open("tokens.json", "r") as f:
+        with open("tokens.json", "r", encoding="utf-8") as f:
             tokens = json.load(f)
-        return tokens
+            
+        # استخراج نصوص التوكن بغض النظر عن طريقة التنسيق داخل tokens.json
+        valid_tokens = []
+        if isinstance(tokens, list):
+            for t in tokens:
+                if isinstance(t, dict):
+                    token_str = t.get("token") or t.get("JwT_ToKeN") or t.get("jwt_token")
+                    if token_str:
+                        valid_tokens.append(token_str)
+                elif isinstance(t, str):
+                    valid_tokens.append(t)
+        return valid_tokens if valid_tokens else None
     except Exception as e:
         app.logger.error(f"Error loading tokens: {e}")
         return None
@@ -70,7 +85,7 @@ async def send_request(encrypted_uid, token, url):
         app.logger.error(f"Exception in send_request: {e}")
         return None
 
-async def send_multiple_requests(uid, server_name, url):
+async def send_multiple_requests(uid, server_name, url, tokens):
     try:
         region = server_name
         protobuf_message = create_protobuf_message(uid, region)
@@ -82,12 +97,8 @@ async def send_multiple_requests(uid, server_name, url):
             app.logger.error("Encryption failed.")
             return None
         tasks = []
-        tokens = load_tokens()
-        if tokens is None:
-            app.logger.error("Failed to load tokens.")
-            return None
         for i in range(100):
-            token = tokens[i % len(tokens)]["token"]
+            token = tokens[i % len(tokens)]
             tasks.append(send_request(encrypted_uid, token, url))
         results = await asyncio.gather(*tasks, return_exceptions=True)
         return results
@@ -120,6 +131,7 @@ def make_request(encrypt, server_name, token):
             url = "https://client.us.freefiremobile.com/GetPlayerPersonalShow"
         else:
             url = "https://clientbp.ggpolarbear.com/GetPlayerPersonalShow"
+            
         edata = bytes.fromhex(encrypt)
         headers = {
             'User-Agent': "UnityPlayer/2022.3.47f1 (UnityWebRequest/1.0, libcurl/8.5.0-DEV)",
@@ -132,7 +144,14 @@ def make_request(encrypt, server_name, token):
             'X-GA': "v1 1",
             'ReleaseVersion': "OB54"
         }
-        response = requests.post(url, data=edata, headers=headers, verify=False)
+        
+        response = requests.post(url, data=edata, headers=headers, verify=False, timeout=10)
+        app.logger.info(f"Garena Response Status Code: {response.status_code}")
+        
+        if response.status_code != 200:
+            app.logger.error(f"Garena error content: {response.status_code} - {response.text}")
+            return None
+
         hex_data = response.content.hex()
         binary = bytes.fromhex(hex_data)
         decode = decode_protobuf(binary)
@@ -155,6 +174,17 @@ def decode_protobuf(binary):
         app.logger.error(f"Unexpected error during protobuf decoding: {e}")
         return None
 
+def extract_region_from_token(token):
+    try:
+        payload = token.split('.')[1]
+        payload += '=' * (-len(payload) % 4)
+        decoded_payload = base64.urlsafe_b64decode(payload).decode('utf-8')
+        parsed_payload = json.loads(decoded_payload)
+        return parsed_payload.get('lock_region', '').upper()
+    except Exception as e:
+        app.logger.error(f"Error decoding token payload: {e}")
+        return ""
+
 @app.route('/', methods=['GET'])
 def index():
     return jsonify({
@@ -163,8 +193,7 @@ def index():
         "status": "API is running",
         "endpoints": "/like?uid=<uid> or /like?uid=<uid>&server_name=<server_name>",
         "example": "/like?uid=123456789 or /like?uid=123456789&server_name=bd"
-})
-
+    })
 
 @app.route('/like', methods=['GET'])
 def handle_requests():
@@ -174,39 +203,38 @@ def handle_requests():
 
     try:
         tokens = load_tokens()
-        if tokens is None or not tokens:
-            return jsonify({"error": "Failed to load tokens."}), 500
-        token = tokens[0]['token']
-        
-        # Extract server_name (lock_region) from token if not provided
-        server_name = request.args.get("server_name", "").upper()
-        if not server_name:
-            try:
-                payload = token.split('.')[1]
-                payload += '=' * (-len(payload) % 4)
-                decoded_payload = base64.urlsafe_b64decode(payload).decode('utf-8')
-                parsed_payload = json.loads(decoded_payload)
-                server_name = parsed_payload.get('lock_region', '').upper()
-            except Exception as e:
-                app.logger.error(f"Error decoding token payload: {e}")
-        
-        if not server_name:
-            return jsonify({"error": "server_name could not be determined from token or input"}), 400
+        if not tokens:
+            return jsonify({"error": "Failed to load tokens or tokens.json is empty."}), 500
         
         encrypted_uid = enc(uid)
         if encrypted_uid is None:
             return jsonify({"error": "Encryption of UID failed."}), 500
 
-        # Get before likes count
-        before = make_request(encrypted_uid, server_name, token)
-        if before is None:
-            return jsonify({"error": "Failed to retrieve player info. There are no valid token found! please update tokens.json with valid tokens"}), 500
+        working_token = None
+        server_name = request.args.get("server_name", "").upper()
+        before = None
+
+        # تجربة التوكنات المتاحة واحداً تلو الآخر حتى ينجح طلب الاتصال
+        for token in tokens:
+            current_server = server_name if server_name else extract_region_from_token(token)
+            if not current_server:
+                continue
+            
+            res = make_request(encrypted_uid, current_server, token)
+            if res is not None:
+                before = res
+                working_token = token
+                server_name = current_server
+                break
+
+        if before is None or not working_token:
+            return jsonify({"error": "Failed to retrieve player info. No valid token found or Garena blocked request!"}), 500
         
         data_before = json.loads(MessageToJson(before))
         before_like = int(data_before.get('AccountInfo', {}).get('Likes', 0) or 0)
         app.logger.info(f"Likes before: {before_like}")
 
-        # Determine URL based on server
+        # تحديد رابط سيرفر الإعجابات
         if server_name == "IND":
             url = "https://client.ind.freefiremobile.com/LikeProfile"
         elif server_name in {"BR", "US", "SAC", "NA"}:
@@ -214,12 +242,12 @@ def handle_requests():
         else:
             url = "https://clientbp.ggpolarbear.com/LikeProfile"
 
-        # Send like requests
-        requests_sent = asyncio.run(send_multiple_requests(uid, server_name, url))
+        # إرسال طلبات الإعجاب
+        requests_sent = asyncio.run(send_multiple_requests(uid, server_name, url, tokens))
         app.logger.info(f"Requests sent: {requests_sent}")
 
-        # Get after likes count
-        after = make_request(encrypted_uid, server_name, token)
+        # جلب الإعجابات بعد التنفيذ
+        after = make_request(encrypted_uid, server_name, working_token)
         if after is None:
             return jsonify({"error": "Failed to retrieve player info after likes."}), 500
         
