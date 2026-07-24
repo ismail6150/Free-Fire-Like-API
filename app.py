@@ -14,17 +14,25 @@ from google.protobuf.message import DecodeError
 import base64
 import urllib3
 
-# تعطيل تحذيرات SSL غير المشفرة
+# تعطيل تحذيرات SSL
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
+# رابط Raw المباشر لملف tokens.json في مستودعك
+RAW_TOKENS_URL = "https://raw.githubusercontent.com/Ismail6150/FFAPIHCGGCHCJ/main/tokens.json"
+
 def load_tokens():
     try:
-        with open("tokens.json", "r", encoding="utf-8") as f:
-            tokens = json.load(f)
+        # جلب التوكنات المحدثة مباشرة من GitHub لمنع الحاجة إلى Redeploy
+        response = requests.get(RAW_TOKENS_URL, timeout=5)
+        if response.status_code == 200:
+            tokens = response.json()
+        else:
+            # خيار احتياطي: قراءة الملف المحلي في حال وجود مشكلة شبكة
+            with open("tokens.json", "r", encoding="utf-8") as f:
+                tokens = json.load(f)
             
-        # استخراج نصوص التوكن بغض النظر عن طريقة التنسيق داخل tokens.json
         valid_tokens = []
         if isinstance(tokens, list):
             for t in tokens:
@@ -36,8 +44,22 @@ def load_tokens():
                     valid_tokens.append(t)
         return valid_tokens if valid_tokens else None
     except Exception as e:
-        app.logger.error(f"Error loading tokens: {e}")
-        return None
+        app.logger.error(f"Error loading tokens dynamically: {e}")
+        # محاولة احتياطية لقراءة الملف المحلي
+        try:
+            with open("tokens.json", "r", encoding="utf-8") as f:
+                tokens = json.load(f)
+                valid_tokens = []
+                for t in tokens:
+                    if isinstance(t, dict):
+                        token_str = t.get("token") or t.get("JwT_ToKeN")
+                        if token_str:
+                            valid_tokens.append(token_str)
+                    elif isinstance(t, str):
+                        valid_tokens.append(t)
+                return valid_tokens
+        except Exception:
+            return None
 
 def encrypt_message(plaintext):
     try:
@@ -204,7 +226,7 @@ def handle_requests():
     try:
         tokens = load_tokens()
         if not tokens:
-            return jsonify({"error": "Failed to load tokens or tokens.json is empty."}), 500
+            return jsonify({"error": "Failed to load tokens from GitHub or local file."}), 500
         
         encrypted_uid = enc(uid)
         if encrypted_uid is None:
@@ -214,7 +236,7 @@ def handle_requests():
         server_name = request.args.get("server_name", "").upper()
         before = None
 
-        # تجربة التوكنات المتاحة واحداً تلو الآخر حتى ينجح طلب الاتصال
+        # تجربة التوكنات المتاحة واحداً تلو الآخر
         for token in tokens:
             current_server = server_name if server_name else extract_region_from_token(token)
             if not current_server:
@@ -234,7 +256,7 @@ def handle_requests():
         before_like = int(data_before.get('AccountInfo', {}).get('Likes', 0) or 0)
         app.logger.info(f"Likes before: {before_like}")
 
-        # تحديد رابط سيرفر الإعجابات
+        # تحديد سيرفر الإعجابات
         if server_name == "IND":
             url = "https://client.ind.freefiremobile.com/LikeProfile"
         elif server_name in {"BR", "US", "SAC", "NA"}:
