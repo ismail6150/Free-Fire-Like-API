@@ -1,10 +1,9 @@
-# .github/workflows/update_tokens.yml
 name: Update Tokens
 
 on:
   schedule:
-    - cron: '0 */7 * * *'  # প্রতি ৭ ঘণ্টা পরপর
-  workflow_dispatch:  # ম্যানুয়ালি রান করার অপশন
+    - cron: '0 */6 * * *'  # تشغيل تلقائي كل 6 ساعات
+  workflow_dispatch:      # إمكانية التشغيل اليدوي
 
 jobs:
   update-tokens:
@@ -12,14 +11,12 @@ jobs:
     
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: '3.10'
 
       - name: Install dependencies
         run: |
@@ -27,7 +24,7 @@ jobs:
           pip install requests
 
       - name: Run token update script
-        run: python update_tokens.py
+        run: python update_tokens.py # ⚠️ تأكد من اسم ملف البايثون لديك هنا
 
       - name: Commit and push if changed
         run: |
@@ -35,5 +32,5 @@ jobs:
           git config --global user.name "GitHub Action"
           git add tokens.json
           git diff --quiet && git diff --staged --quiet || (git commit -m "Update tokens [automated]" && git push)
-          git pull --rebase origin main
-          git push origin main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
