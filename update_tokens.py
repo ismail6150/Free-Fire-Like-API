@@ -4,15 +4,15 @@ import json
 UIDPASS_FILE = "uidpass.json"
 TOKEN_FILE = "tokens.json"
 
-# الـ API الخاص بك
+# رابط الـ API الخاص بك
 API_URL = "http://187.127.175.208:5001/Bmw"
 
 def read_uidpass():
     try:
         with open(UIDPASS_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except FileNotFoundError:
-        print(f"خطأ: الملف {UIDPASS_FILE} غير موجود.")
+    except Exception as e:
+        print(f"خطأ في قراءة ملف {UIDPASS_FILE}: {e}")
         return []
 
 def fetch_token(uid, password):
@@ -21,22 +21,21 @@ def fetch_token(uid, password):
         "password": password
     }
     try:
-        response = requests.get(API_URL, params=params, timeout=10)
+        response = requests.get(API_URL, params=params, timeout=15)
         response.raise_for_status()
         data = response.json()
         
-        # استخراج JwT_ToKeN و staTuS حسب استجابة الـ API في الصورة
-        jwt_token = data.get("JwT_ToKeN")
-        status = data.get("staTuS")
+        # استخراج التوكن مع فحص جميع المفاتيح المحتملة (JwT_ToKeN / token / jwt_token)
+        jwt_token = data.get("JwT_ToKeN") or data.get("token") or data.get("jwt_token")
         
-        if jwt_token and status == "success":
+        if jwt_token:
             return jwt_token
         else:
-            print(f"فشل جلب التوكن للـ UID {uid}: {status}")
+            print(f"لم يتم العثور على توكن للـ UID {uid}. الاستجابة المستلمة: {data}")
             return None
             
     except Exception as e:
-        print(f"خطأ أثناء جلب التوكن للـ UID {uid}: {e}")
+        print(f"خطأ أثناء الاتصال بالـ API للـ UID {uid}: {e}")
         return None
 
 def update_token_file(token_list):
@@ -46,6 +45,7 @@ def update_token_file(token_list):
 def main():
     uidpass_list = read_uidpass()
     if not uidpass_list:
+        print("ملف uidpass.json فارغ أو غير موجود.")
         return
 
     new_tokens = []
