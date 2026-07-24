@@ -4,7 +4,7 @@ import json
 UIDPASS_FILE = "uidpass.json"
 TOKEN_FILE = "tokens.json"
 
-# رابط الـ API الخاص بك
+# رابط الـ API
 API_URL = "http://187.127.175.208:5001/Bmw"
 
 def read_uidpass():
@@ -25,7 +25,7 @@ def fetch_token(uid, password):
         response.raise_for_status()
         data = response.json()
         
-        # استخراج التوكن مع فحص جميع المفاتيح المحتملة (JwT_ToKeN / token / jwt_token)
+        # استخراج التوكن سواء كان المفتاح JwT_ToKeN أو token
         jwt_token = data.get("JwT_ToKeN") or data.get("token") or data.get("jwt_token")
         
         if jwt_token:
@@ -40,7 +40,7 @@ def fetch_token(uid, password):
 
 def update_token_file(token_list):
     with open(TOKEN_FILE, "w", encoding="utf-8") as f:
-        json.dump(token_list, f, ensure_ascii=False, indent=4)
+        json.dump(token_list, f, ensure_ascii=False, indent=2)
 
 def main():
     uidpass_list = read_uidpass()
@@ -56,8 +56,8 @@ def main():
         if uid and password:
             token = fetch_token(uid, password)
             if token:
+                # حفظ التوكن فقط بدون UID ليتوافق تماماً مع الـ API
                 new_tokens.append({
-                    "uid": uid,
                     "token": token
                 })
 
